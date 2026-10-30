@@ -1,0 +1,749 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>鹈鹕骑自行车 · Three.js 程序化场景</title>
+<style>
+  :root {
+    --panel: rgba(18, 24, 34, 0.72);
+    --panel-border: rgba(255, 255, 255, 0.14);
+    --accent: #ffb347;
+    --text: #eef2f7;
+    --muted: #9aa7b8;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: #0d1220;
+    font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    user-select: none;
+  }
+  #scene { position: fixed; inset: 0; display: block; }
+
+  #hud {
+    position: fixed;
+    top: 18px;
+    left: 18px;
+    pointer-events: none;
+    color: var(--text);
+  }
+  #hud h1 {
+    font-size: 19px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    text-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
+  }
+  #hud p {
+    margin-top: 6px;
+    font-size: 12px;
+    color: var(--muted);
+    text-shadow: 0 1px 6px rgba(0, 0, 0, 0.5);
+  }
+
+  #panel {
+    position: fixed;
+    bottom: 22px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    padding: 12px 18px;
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-radius: 14px;
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    box-shadow: 0 10px 34px rgba(0, 0, 0, 0.35);
+    pointer-events: auto;
+    color: var(--text);
+  }
+  #panel label {
+    font-size: 13px;
+    white-space: nowrap;
+    color: var(--muted);
+  }
+  #panel label b { color: var(--text); font-weight: 600; }
+  input[type="range"] {
+    -webkit-appearance: none;
+    width: 170px;
+    height: 5px;
+    border-radius: 4px;
+    background: linear-gradient(90deg, var(--accent), #ff7b5e);
+    outline: none;
+    cursor: pointer;
+  }
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 17px;
+    height: 17px;
+    border-radius: 50%;
+    background: #fff;
+    border: 3px solid var(--accent);
+    cursor: pointer;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+  }
+  button {
+    pointer-events: auto;
+    padding: 8px 14px;
+    font-size: 13px;
+    color: var(--text);
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid var(--panel-border);
+    border-radius: 9px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.15s ease, transform 0.1s ease;
+  }
+  button:hover { background: rgba(255, 255, 255, 0.16); }
+  button:active { transform: translateY(1px); }
+  .pill {
+    min-width: 44px;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+    color: var(--accent);
+    font-weight: 600;
+  }
+  #hint {
+    position: fixed;
+    right: 18px;
+    bottom: 20px;
+    font-size: 12px;
+    color: var(--muted);
+    pointer-events: none;
+    text-shadow: 0 1px 6px rgba(0, 0, 0, 0.5);
+  }
+  @media (max-width: 640px) {
+    #panel { gap: 10px; padding: 10px 12px; }
+    input[type="range"] { width: 100px; }
+    #hint { display: none; }
+  }
+</style>
+</head>
+<body>
+<canvas id="scene"></canvas>
+
+<div id="hud">
+  <h1>鹈鹕骑自行车</h1>
+  <p>程序化建模 · 拖拽旋转 · 滚轮缩放 · 右键平移</p>
+</div>
+
+<div id="hint">🖱 左键旋转 · 滚轮缩放 · 右键平移</div>
+
+<div id="panel">
+  <label>骑行速度</label>
+  <input id="speed" type="range" min="0" max="2.5" step="0.01" value="1">
+  <span id="speedVal" class="pill">1.0×</span>
+  <button id="reset">重置视角</button>
+  <button id="follow">视角跟随</button>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+/* ============================= 渲染器 / 场景 / 相机 ============================= */
+const canvas = document.getElementById('scene');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.05;
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0xcfe8f5);
+scene.fog = new THREE.Fog(0xd6e9f5, 34, 82);
+
+const camera = new THREE.PerspectiveCamera(48, window.innerWidth / window.innerHeight, 0.1, 220);
+camera.position.set(7.5, 6.5, 13.5);
+
+const controls = new OrbitControls(camera, canvas);
+controls.target.set(0, 1.0, 0);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.minDistance = 3;
+controls.maxDistance = 34;
+controls.maxPolarAngle = Math.PI * 0.52;
+controls.update();
+
+/* ============================= 灯光 ============================= */
+const hemi = new THREE.HemisphereLight(0xbfd9ff, 0x8a9a6a, 0.85);
+scene.add(hemi);
+
+const sun = new THREE.DirectionalLight(0xfff2dd, 2.2);
+sun.position.set(14, 22, 10);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.camera.left = -16;
+sun.shadow.camera.right = 16;
+sun.shadow.camera.top = 16;
+sun.shadow.camera.bottom = -16;
+sun.shadow.camera.near = 2;
+sun.shadow.camera.far = 70;
+sun.shadow.bias = -0.0005;
+sun.shadow.normalBias = 0.02;
+scene.add(sun);
+
+const rim = new THREE.DirectionalLight(0xffffff, 0.45);
+rim.position.set(-8, 6, -6);
+scene.add(rim);
+
+/* ============================= 天空渐变穹顶 ============================= */
+const sky = new THREE.Mesh(
+  new THREE.SphereGeometry(150, 32, 16),
+  new THREE.ShaderMaterial({
+    side: THREE.BackSide,
+    depthWrite: false,
+    fog: false,
+    uniforms: {
+      top: { value: new THREE.Color(0x3f7fc4) },
+      mid: { value: new THREE.Color(0x8fc0e8) },
+      bottom: { value: new THREE.Color(0xe6f3fb) }
+    },
+    vertexShader: `
+      varying vec3 vDir;
+      void main() {
+        vDir = normalize(position);
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: `
+      varying vec3 vDir;
+      uniform vec3 top;
+      uniform vec3 mid;
+      uniform vec3 bottom;
+      void main() {
+        float h = clamp(vDir.y, -1.0, 1.0);
+        vec3 c = h > 0.0
+          ? mix(mid, top, pow(h, 0.65))
+          : mix(mid, bottom, pow(-h, 0.7));
+        gl_FragColor = vec4(c, 1.0);
+      }
+    `
+  })
+);
+scene.add(sky);
+
+/* ============================= 常量 ============================= */
+const WHEEL_R = 0.5;
+const FRONT = new THREE.Vector3(0.78, WHEEL_R, 0);
+const REAR = new THREE.Vector3(-0.78, WHEEL_R, 0);
+const BB = new THREE.Vector3(-0.12, WHEEL_R, 0);
+const CRANK_LEN = 0.17;
+const PEDAL_Z = 0.13;
+const BODY_POS = new THREE.Vector3(-0.5, 1.38, 0);
+const THIGH = 0.33;
+const SHIN = 0.37;
+const HIP_LOCAL = new THREE.Vector3(0.06, -0.20, 0);
+const R_PATH = 5.5;
+const Y_AXIS = new THREE.Vector3(0, 1, 0);
+const Z_AXIS = new THREE.Vector3(0, 0, 1);
+
+/* ============================= 材质 ============================= */
+const mat = {
+  pelicanBody: new THREE.MeshStandardMaterial({ color: 0xf7f6f1, roughness: 0.82, metalness: 0.0 }),
+  pelicanBelly: new THREE.MeshStandardMaterial({ color: 0xefece4, roughness: 0.85 }),
+  wing: new THREE.MeshStandardMaterial({ color: 0xecebe4, roughness: 0.9 }),
+  wingTip: new THREE.MeshStandardMaterial({ color: 0x9aa0a6, roughness: 0.85 }),
+  beak: new THREE.MeshStandardMaterial({ color: 0xf2a63a, roughness: 0.55 }),
+  pouch: new THREE.MeshStandardMaterial({ color: 0xe88f28, roughness: 0.6, metalness: 0.05 }),
+  leg: new THREE.MeshStandardMaterial({ color: 0xf0a63a, roughness: 0.6 }),
+  foot: new THREE.MeshStandardMaterial({ color: 0xe8952c, roughness: 0.6 }),
+  eye: new THREE.MeshStandardMaterial({ color: 0x1b1b1b, roughness: 0.25 }),
+  eyeGlint: new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.2 }),
+  frame: new THREE.MeshStandardMaterial({ color: 0x2f6f9f, roughness: 0.35, metalness: 0.55 }),
+  frameDark: new THREE.MeshStandardMaterial({ color: 0x254f74, roughness: 0.4, metalness: 0.5 }),
+  steel: new THREE.MeshStandardMaterial({ color: 0xd7dde3, roughness: 0.3, metalness: 0.7 }),
+  tire: new THREE.MeshStandardMaterial({ color: 0x23262a, roughness: 0.9 }),
+  chain: new THREE.MeshStandardMaterial({ color: 0x3a3f45, roughness: 0.5, metalness: 0.6 }),
+  seat: new THREE.MeshStandardMaterial({ color: 0x2a2d31, roughness: 0.7 }),
+  grip: new THREE.MeshStandardMaterial({ color: 0x2a2d31, roughness: 0.8 }),
+  ground: new THREE.MeshStandardMaterial({ color: 0x86a868, roughness: 1.0 }),
+  road: new THREE.MeshStandardMaterial({ color: 0xc9b18c, roughness: 0.95 }),
+  trunk: new THREE.MeshStandardMaterial({ color: 0x6b4a2f, roughness: 0.9 }),
+  leaf: new THREE.MeshStandardMaterial({ color: 0x4f7d3a, roughness: 0.85 }),
+  leafLight: new THREE.MeshStandardMaterial({ color: 0x6a9a4a, roughness: 0.85 }),
+  grass: new THREE.MeshStandardMaterial({ color: 0x6f9550, roughness: 1.0 }),
+  flower: new THREE.MeshStandardMaterial({ color: 0xf4d35e, roughness: 0.8 }),
+  cloud: new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 1.0, flatShading: false })
+};
+
+/* ============================= 辅助函数 ============================= */
+function tube(a, b, radius, material, radial = 12) {
+  const dir = new THREE.Vector3().subVectors(b, a);
+  const len = dir.length();
+  const mesh = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius, len, radial), material);
+  mesh.position.copy(a).add(b).multiplyScalar(0.5);
+  mesh.quaternion.setFromUnitVectors(Y_AXIS, dir.normalize());
+  return mesh;
+}
+
+function orientUnitTube(mesh, a, b) {
+  const dir = new THREE.Vector3().subVectors(b, a);
+  const len = dir.length();
+  mesh.position.copy(a).add(b).multiplyScalar(0.5);
+  mesh.scale.y = len;
+  mesh.quaternion.setFromUnitVectors(Y_AXIS, dir.normalize());
+}
+
+function solveIK(hip, ankle, l1, l2, sideDir) {
+  const dir = new THREE.Vector3().subVectors(ankle, hip);
+  const d = dir.length();
+  const dist = Math.min(Math.max(d, Math.abs(l1 - l2) + 0.001), l1 + l2 - 0.001);
+  const a = (l1 * l1 + dist * dist - l2 * l2) / (2 * l1 * dist);
+  const aClamped = Math.max(-1, Math.min(1, a));
+  const h = Math.sqrt(Math.max(0, l1 * l1 - (aClamped * l1) * (aClamped * l1)));
+  dir.normalize();
+  const along = hip.clone().add(dir.clone().multiplyScalar(aClamped * l1));
+  const side = sideDir.clone();
+  const orth = new THREE.Vector3().crossVectors(dir, side).normalize();
+  const kneeDir = new THREE.Vector3().crossVectors(orth, dir).normalize();
+  return along.clone().add(kneeDir.multiplyScalar(h));
+}
+
+function pedalPos(angle, z) {
+  return new THREE.Vector3(
+    BB.x + Math.cos(angle) * CRANK_LEN,
+    BB.y - Math.sin(angle) * CRANK_LEN,
+    z
+  );
+}
+
+/* ============================= 地面与环境 ============================= */
+const ground = new THREE.Mesh(new THREE.CircleGeometry(60, 64), mat.ground);
+ground.rotation.x = -Math.PI / 2;
+ground.receiveShadow = true;
+scene.add(ground);
+
+const road = new THREE.Mesh(new THREE.RingGeometry(R_PATH - 0.6, R_PATH + 0.6, 96), mat.road);
+road.rotation.x = -Math.PI / 2;
+road.position.y = 0.015;
+road.receiveShadow = true;
+scene.add(road);
+
+const roadLine = new THREE.Mesh(
+  new THREE.RingGeometry(R_PATH - 0.05, R_PATH + 0.05, 96),
+  new THREE.MeshStandardMaterial({ color: 0xe6d9c0, roughness: 0.9 })
+);
+roadLine.rotation.x = -Math.PI / 2;
+roadLine.position.y = 0.02;
+scene.add(roadLine);
+
+function makeTree(x, z, s) {
+  const g = new THREE.Group();
+  const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.14 * s, 0.2 * s, 1.6 * s, 10), mat.trunk);
+  trunk.position.y = 0.8 * s;
+  trunk.castShadow = true;
+  g.add(trunk);
+  const crown = new THREE.Mesh(new THREE.SphereGeometry(0.9 * s, 20, 16), mat.leaf);
+  crown.position.y = 1.9 * s;
+  crown.castShadow = true;
+  g.add(crown);
+  const crown2 = new THREE.Mesh(new THREE.SphereGeometry(0.65 * s, 18, 14), mat.leafLight);
+  crown2.position.set(0.35 * s, 2.25 * s, 0.2 * s);
+  crown2.castShadow = true;
+  g.add(crown2);
+  g.position.set(x, 0, z);
+  return g;
+}
+[
+  [9, 9, 1.15], [-11, 4, 0.95], [12, -6, 1.25], [-8, -12, 1.05],
+  [4, -13, 0.9], [-14, -2, 1.2], [15, 9, 1.0], [-6, 15, 1.1]
+].forEach(([x, z, s]) => scene.add(makeTree(x, z, s)));
+
+const grassGeo = new THREE.ConeGeometry(0.045, 0.22, 5);
+const grass = new THREE.InstancedMesh(grassGeo, mat.grass, 320);
+grass.castShadow = true;
+const dummy = new THREE.Object3D();
+let gi = 0;
+while (gi < 320) {
+  const r = 6.5 + Math.random() * 22;
+  const a = Math.random() * Math.PI * 2;
+  const x = Math.cos(a) * r;
+  const z = Math.sin(a) * r;
+  dummy.position.set(x, 0.1, z);
+  dummy.rotation.set((Math.random() - 0.5) * 0.5, Math.random() * Math.PI, (Math.random() - 0.5) * 0.5);
+  dummy.scale.setScalar(0.7 + Math.random() * 1.2);
+  dummy.updateMatrix();
+  grass.setMatrixAt(gi, dummy.matrix);
+  gi++;
+}
+grass.instanceMatrix.needsUpdate = true;
+scene.add(grass);
+
+const flowerGeo = new THREE.SphereGeometry(0.05, 8, 6);
+const flowers = new THREE.InstancedMesh(flowerGeo, mat.flower, 80);
+let fi = 0;
+while (fi < 80) {
+  const r = 6.5 + Math.random() * 20;
+  const a = Math.random() * Math.PI * 2;
+  dummy.position.set(Math.cos(a) * r, 0.06, Math.sin(a) * r);
+  dummy.scale.set(1, 0.6 + Math.random() * 0.6, 1);
+  dummy.updateMatrix();
+  flowers.setMatrixAt(fi, dummy.matrix);
+  fi++;
+}
+flowers.instanceMatrix.needsUpdate = true;
+scene.add(flowers);
+
+function makeCloud(x, y, z, s) {
+  const g = new THREE.Group();
+  const puffs = [[0, 0, 0, 1], [0.9, 0.15, 0.1, 0.75], [-0.9, 0.12, -0.05, 0.7], [0.35, 0.35, 0.15, 0.6], [-0.4, 0.3, -0.2, 0.55]];
+  puffs.forEach(([px, py, pz, pr]) => {
+    const p = new THREE.Mesh(new THREE.SphereGeometry(pr * s, 18, 14), mat.cloud);
+    p.position.set(px * s, py * s, pz * s);
+    g.add(p);
+  });
+  g.position.set(x, y, z);
+  return g;
+}
+const clouds = [
+  makeCloud(-14, 13, -10, 1.6), makeCloud(12, 15, 8, 2.0),
+  makeCloud(0, 11, -18, 1.8), makeCloud(-6, 16, 16, 1.4), makeCloud(20, 14, -4, 1.7)
+];
+clouds.forEach(c => scene.add(c));
+
+/* ============================= 自行车 ============================= */
+const rider = new THREE.Group();
+scene.add(rider);
+
+const bike = new THREE.Group();
+rider.add(bike);
+
+function makeWheel() {
+  const g = new THREE.Group();
+  const tire = new THREE.Mesh(new THREE.TorusGeometry(WHEEL_R - 0.04, 0.045, 14, 40), mat.tire);
+  tire.castShadow = true;
+  g.add(tire);
+  const rimM = new THREE.Mesh(new THREE.TorusGeometry(WHEEL_R - 0.085, 0.022, 10, 40), mat.steel);
+  g.add(rimM);
+  const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.055, 0.14, 14), mat.steel);
+  hub.rotation.x = Math.PI / 2;
+  hub.castShadow = true;
+  g.add(hub);
+  const spokeGeo = new THREE.CylinderGeometry(0.007, 0.007, WHEEL_R - 0.1, 6);
+  for (let i = 0; i < 12; i++) {
+    const a = (i / 12) * Math.PI * 2;
+    const s = new THREE.Mesh(spokeGeo, mat.steel);
+    s.rotation.z = a;
+    s.position.set(Math.cos(a) * (WHEEL_R - 0.1) / 2, Math.sin(a) * (WHEEL_R - 0.1) / 2, 0);
+    g.add(s);
+  }
+  return g;
+}
+
+const wheelFront = makeWheel();
+wheelFront.position.copy(FRONT);
+bike.add(wheelFront);
+
+const wheelRear = makeWheel();
+wheelRear.position.copy(REAR);
+bike.add(wheelRear);
+
+const rearCog = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.075, 0.06, 16), mat.steel);
+rearCog.rotation.x = Math.PI / 2;
+rearCog.position.copy(REAR);
+bike.add(rearCog);
+
+const tubes = [
+  [BB, new THREE.Vector3(-0.5, 1.02, 0)],                       // 座管
+  [BB, new THREE.Vector3(0.5, 0.92, 0)],                        // 下管
+  [new THREE.Vector3(-0.36, 1.06, 0), new THREE.Vector3(0.5, 1.02, 0)], // 上管
+  [BB, REAR.clone()],                                           // 后下叉
+  [new THREE.Vector3(-0.42, 1.08, 0), REAR.clone()],            // 后上叉
+  [new THREE.Vector3(0.5, 0.92, 0), FRONT.clone()],             // 前叉
+  [new THREE.Vector3(0.5, 0.92, 0), new THREE.Vector3(0.52, 1.08, 0)]  // 头管
+];
+tubes.forEach(([a, b], i) => {
+  const m = tube(a, b, 0.032, i % 2 ? mat.frame : mat.frameDark);
+  m.castShadow = true;
+  bike.add(m);
+});
+
+const seatPost = tube(new THREE.Vector3(-0.5, 1.02, 0), new THREE.Vector3(-0.5, 1.12, 0), 0.022, mat.steel);
+bike.add(seatPost);
+const saddle = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.05, 0.14), mat.seat);
+saddle.position.set(-0.5, 1.15, 0);
+saddle.rotation.x = -0.06;
+saddle.castShadow = true;
+bike.add(saddle);
+
+const handleStem = tube(new THREE.Vector3(0.52, 1.08, 0), new THREE.Vector3(0.5, 1.16, 0), 0.02, mat.steel);
+bike.add(handleStem);
+const handlebar = tube(new THREE.Vector3(0.5, 1.16, -0.14), new THREE.Vector3(0.5, 1.16, 0.14), 0.02, mat.steel);
+bike.add(handlebar);
+const gripL = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.028, 0.1, 10), mat.grip);
+gripL.rotation.z = Math.PI / 2;
+gripL.position.set(0.5, 1.16, -0.17);
+bike.add(gripL);
+const gripR = gripL.clone();
+gripR.position.z = 0.17;
+bike.add(gripR);
+
+const chainPoints = [];
+const cx = (BB.x + REAR.x) / 2, rx = (REAR.x - BB.x) / 2, ry = 0.2;
+for (let i = 0; i < 14; i++) {
+  const a = (i / 14) * Math.PI * 2;
+  chainPoints.push(new THREE.Vector3(cx + Math.cos(a) * rx, BB.y + Math.sin(a) * ry, 0));
+}
+const chainPath = new THREE.CatmullRomCurve3(chainPoints, true, 'catmullrom', 0.5);
+const chain = new THREE.Mesh(new THREE.TubeGeometry(chainPath, 60, 0.012, 8), mat.chain);
+bike.add(chain);
+
+const crank = new THREE.Group();
+crank.position.copy(BB);
+bike.add(crank);
+
+const chainring = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.15, 0.04, 28), mat.steel);
+chainring.rotation.x = Math.PI / 2;
+chainring.castShadow = true;
+crank.add(chainring);
+
+function makeCrankArm(z) {
+  const g = new THREE.Group();
+  const arm = new THREE.Mesh(new THREE.BoxGeometry(CRANK_LEN, 0.028, 0.028), mat.steel);
+  arm.position.x = CRANK_LEN / 2;
+  arm.castShadow = true;
+  g.add(arm);
+  const pedal = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.022, 0.16), mat.seat);
+  pedal.position.set(CRANK_LEN, 0, z);
+  pedal.castShadow = true;
+  g.add(pedal);
+  return g;
+}
+const crankLeft = makeCrankArm(PEDAL_Z);
+crank.add(crankLeft);
+const crankRight = makeCrankArm(-PEDAL_Z);
+crank.add(crankRight);
+
+/* ============================= 鹈鹕 ============================= */
+const body = new THREE.Group();
+body.position.copy(BODY_POS);
+body.rotation.z = -0.13;
+rider.add(body);
+
+const torso = new THREE.Mesh(new THREE.SphereGeometry(0.34, 32, 24), mat.pelicanBody);
+torso.scale.set(1.0, 0.85, 0.72);
+torso.castShadow = true;
+body.add(torso);
+
+const belly = new THREE.Mesh(new THREE.SphereGeometry(0.26, 24, 18), mat.pelicanBelly);
+belly.scale.set(0.9, 0.85, 0.75);
+belly.position.set(0.04, -0.12, 0);
+body.add(belly);
+
+const tail = new THREE.Mesh(new THREE.ConeGeometry(0.12, 0.34, 12), mat.pelicanBody);
+tail.rotation.z = Math.PI / 2;
+tail.position.set(-0.42, 0.06, 0);
+tail.castShadow = true;
+body.add(tail);
+
+function makeWing(side) {
+  const g = new THREE.Group();
+  g.position.set(0.02, 0.14, side * 0.26);
+  const wingM = new THREE.Mesh(new THREE.SphereGeometry(0.22, 24, 16), mat.wing);
+  wingM.scale.set(1.65, 0.16, 0.6);
+  wingM.position.set(-0.18, 0, 0);
+  wingM.castShadow = true;
+  g.add(wingM);
+  const tip = new THREE.Mesh(new THREE.SphereGeometry(0.1, 16, 12), mat.wingTip);
+  tip.scale.set(1.1, 0.5, 0.7);
+  tip.position.set(-0.42, 0, 0);
+  tip.castShadow = true;
+  g.add(tip);
+  g.rotation.z = side * -0.12;
+  return g;
+}
+const wingL = makeWing(1);
+const wingR = makeWing(-1);
+body.add(wingL, wingR);
+
+const neckCurve = new THREE.CatmullRomCurve3([
+  new THREE.Vector3(0.12, 0.22, 0),
+  new THREE.Vector3(0.28, 0.44, 0),
+  new THREE.Vector3(0.44, 0.55, 0),
+  new THREE.Vector3(0.56, 0.55, 0)
+], false, 'catmullrom', 0.5);
+const neck = new THREE.Mesh(new THREE.TubeGeometry(neckCurve, 28, 0.07, 16), mat.pelicanBody);
+neck.castShadow = true;
+body.add(neck);
+
+const head = new THREE.Group();
+head.position.set(0.56, 0.55, 0);
+body.add(head);
+
+const skull = new THREE.Mesh(new THREE.SphereGeometry(0.115, 26, 20), mat.pelicanBody);
+skull.position.set(0.02, 0.01, 0);
+skull.castShadow = true;
+head.add(skull);
+
+const upperBeak = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.05, 0.4, 14), mat.beak);
+upperBeak.rotation.z = -Math.PI / 2;
+upperBeak.scale.set(1, 0.62, 0.4);
+upperBeak.position.set(0.18, -0.015, 0);
+upperBeak.castShadow = true;
+head.add(upperBeak);
+
+const lowerJaw = new THREE.Group();
+lowerJaw.position.set(0.1, -0.045, 0);
+head.add(lowerJaw);
+
+const lowerBeak = new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.035, 0.36, 12), mat.beak);
+lowerBeak.rotation.z = -Math.PI / 2;
+lowerBeak.scale.set(1, 0.5, 0.32);
+lowerBeak.position.set(0.12, -0.02, 0);
+lowerJaw.add(lowerBeak);
+
+const pouch = new THREE.Mesh(new THREE.SphereGeometry(0.14, 22, 18), mat.pouch);
+pouch.scale.set(1.35, 1.5, 0.75);
+pouch.position.set(0.08, -0.14, 0);
+pouch.castShadow = true;
+lowerJaw.add(pouch);
+
+const eyeGeo = new THREE.SphereGeometry(0.026, 14, 12);
+function makeEye(side) {
+  const e = new THREE.Mesh(eyeGeo, mat.eye);
+  e.position.set(0.05, 0.05, side * 0.085);
+  head.add(e);
+  const g = new THREE.Mesh(new THREE.SphereGeometry(0.008, 8, 6), mat.eyeGlint);
+  g.position.set(0.065, 0.062, side * 0.095);
+  head.add(g);
+}
+makeEye(1);
+makeEye(-1);
+
+function makeLeg(side) {
+  const thigh = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.036, 1, 12), mat.leg);
+  thigh.castShadow = true;
+  rider.add(thigh);
+  const shin = new THREE.Mesh(new THREE.CylinderGeometry(0.036, 0.026, 1, 12), mat.leg);
+  shin.castShadow = true;
+  rider.add(shin);
+  const foot = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.03, 0.09), mat.foot);
+  foot.castShadow = true;
+  rider.add(foot);
+  return { thigh, shin, foot, side };
+}
+const legL = makeLeg(1);
+const legR = makeLeg(-1);
+
+/* ============================= 动画状态 ============================= */
+let speed = 1.0;
+let crankAngle = 0;
+let pathAngle = 0;
+let follow = false;
+const clock = new THREE.Clock();
+
+function updateLeg(leg, angle, time) {
+  const hipLocal = HIP_LOCAL.clone();
+  hipLocal.z = leg.side * 0.095;
+  hipLocal.applyAxisAngle(Z_AXIS, body.rotation.z);
+  const hip = BODY_POS.clone().add(hipLocal);
+
+  const ankle = pedalPos(angle, leg.side * PEDAL_Z);
+  ankle.y += 0.05;
+
+  const knee = solveIK(hip, ankle, THIGH, SHIN, new THREE.Vector3(0, 0, leg.side));
+  orientUnitTube(leg.thigh, hip, knee);
+  orientUnitTube(leg.shin, knee, ankle);
+
+  leg.foot.position.copy(ankle);
+  leg.foot.position.y -= 0.02;
+  leg.foot.position.x += 0.015;
+  leg.foot.rotation.set(0, 0, 0);
+}
+
+function animate() {
+  requestAnimationFrame(animate);
+  const dt = Math.min(clock.getDelta(), 0.05);
+  const time = clock.elapsedTime;
+
+  const crankSpeed = speed * 2.4;
+  crankAngle += crankSpeed * dt;
+  const v = crankSpeed * WHEEL_R;
+  pathAngle += (v / R_PATH) * dt;
+
+  const px = Math.cos(pathAngle) * R_PATH;
+  const pz = Math.sin(pathAngle) * R_PATH;
+  rider.position.set(px, 0, pz);
+  const fx = -Math.sin(pathAngle), fz = Math.cos(pathAngle);
+  rider.rotation.y = Math.atan2(-fz, fx);
+
+  wheelFront.rotation.z = crankAngle;
+  wheelRear.rotation.z = crankAngle;
+  crank.rotation.z = -crankAngle;
+
+  updateLeg(legL, crankAngle, time);
+  updateLeg(legR, crankAngle + Math.PI, time);
+
+  body.rotation.z = -0.13 + Math.sin(crankAngle * 2) * 0.02;
+  body.position.y = BODY_POS.y + Math.sin(crankAngle * 2) * 0.015;
+  body.rotation.x = Math.sin(crankAngle) * 0.03;
+
+  head.rotation.z = Math.sin(time * 1.4) * 0.045;
+  head.rotation.y = Math.sin(time * 0.6) * 0.12;
+  lowerJaw.rotation.z = -(0.04 + Math.max(0, Math.sin(time * 0.9)) * 0.24);
+
+  wingL.rotation.x = Math.sin(time * 2.1) * 0.28;
+  wingR.rotation.x = -Math.sin(time * 2.1) * 0.28;
+  tail.rotation.z = Math.sin(time * 1.6) * 0.06;
+
+  clouds.forEach((c, i) => {
+    c.position.x += Math.sin(time * 0.06 + i) * dt * 0.4;
+    c.position.z += Math.cos(time * 0.05 + i) * dt * 0.3;
+  });
+
+  if (follow) {
+    controls.target.lerp(rider.position.clone().add(new THREE.Vector3(0, 1, 0)), 0.06);
+  }
+  controls.update();
+  renderer.render(scene, camera);
+}
+
+/* ============================= UI 交互 ============================= */
+const speedInput = document.getElementById('speed');
+const speedVal = document.getElementById('speedVal');
+speedInput.addEventListener('input', () => {
+  speed = parseFloat(speedInput.value);
+  speedVal.textContent = speed.toFixed(1) + '×';
+});
+
+document.getElementById('reset').addEventListener('click', () => {
+  follow = false;
+  controls.target.set(0, 1.0, 0);
+  camera.position.set(7.5, 6.5, 13.5);
+});
+
+const followBtn = document.getElementById('follow');
+followBtn.addEventListener('click', () => {
+  follow = !follow;
+  followBtn.textContent = follow ? '取消跟随' : '视角跟随';
+  if (!follow) controls.target.set(0, 1.0, 0);
+});
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+animate();
+</script>
+</body>
+</html>
